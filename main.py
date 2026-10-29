@@ -13,10 +13,10 @@ DEFAULT_STREAM_URL = 'https://streaming.broadcast.radio/aberdeenstudentradio'
 
 async def main():
     ap = argparse.ArgumentParser(description="Scrape ASR homepage slide reel")
-    ap.add_argument('-u', "--url", metavar='url', default=DEFAULT_URL)
-    ap.add_argument('-s', "--stream-url", metavar='stream_url', default=DEFAULT_STREAM_URL)
-    ap.add_argument("-c", "--config", metavar="config")
-    ap.add_argument("-o", "--output", metavar="output", default='./out')
+    ap.add_argument('-u', "--url", metavar='url', default=DEFAULT_URL, help='Url of the website to scrape the metadata and scheduled shows')
+    ap.add_argument('-s', "--stream-url", metavar='stream_url', default=DEFAULT_STREAM_URL, help='Url of the mp3 stream')
+    ap.add_argument("-c", "--config", metavar="config", help='Config file path')
+    ap.add_argument("-o", "--output", metavar="output", default='./out', help='Output folder')
     ap.add_argument("-p", "--padding", default=10, help='Time in minutes added to recording before and after show is scheduled to start/end')
     ap.add_argument("-m", "--mode", metavar="mode", default='CONTINUOUS', help='Mode options are "SINGLE" or "CONTINUOUS"')
 
@@ -47,7 +47,7 @@ async def main():
     print(f'    Aberdeen Student Radio Scraper    ')
     print(f'--------------------------------------')
     print(f'Author: Sidney Pauly')
-    print(f'GitHub: ')
+    print(f'GitHub: https://github.com/sidney-pauly/uoa_radio_recorder')
     print(f'Version: 0.0.1\n')
     print(f'---CONFIG---')
     print(f'URL:        {url}')
