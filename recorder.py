@@ -138,7 +138,7 @@ async def create_record_show_continuous_task(title: str, start: datetime.datetim
         attempt += 1
         file_name = f"{title}.mp3" if attempt == 1 else f"{title}_part{attempt}.mp3"
 
-        print(f"Recording {title} -> {out_dir} ({remaining.total_seconds():i} s)")
+        print(f"Recording {title} -> {out_dir} ({remaining.total_seconds():.0f} s)")
         try:
             await record_show(out_dir, title, stream_url, remaining, file_name)
         except asyncio.CancelledError:
