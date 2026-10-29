@@ -1,6 +1,10 @@
 import datetime
 import os
+import re
 from pathlib import Path
+
+import requests
+from mutagen.id3 import ID3, ID3NoHeaderError, TIT2, TALB, TPE1, TDRC, TCON, APIC
 
 from dateutil import parser
 from webscraper import scrape_slides
@@ -12,13 +16,15 @@ LONDON = ZoneInfo("Europe/London")
 
 def parse_time(time_str: str, tz):
 
-    split = time_str.split("-")
+    split = re.split(r"\s*[-–]\s*", time_str)
 
     start =     split[0].strip()
     end =       split[1].strip()
 
-    start = parser.parse(start, fuzzy=True)
-    end = parser.parse(end, fuzzy=True)
+    # Default date = today in `tz` (dateutil would otherwise use the server's date)
+    today = datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = parser.parse(start, fuzzy=True, default=today)
+    end = parser.parse(end, fuzzy=True, default=today)
 
     if start.tzinfo is None:
         start = start.replace(tzinfo=tz)
@@ -95,6 +101,34 @@ async def record_show(out: str, title: str, url: str, record_length: datetime.ti
         ffmpeg.terminate()
         raise
 
+def tag_recording(path: Path, title: str, start: datetime.datetime, img_url: str | None, part: int = 1):
+    """Write ID3 tags and cover art. Runs after ffmpeg has finished with the file."""
+    art, mime = None, "image/jpeg"
+    if img_url:
+        try:
+            r = requests.get(img_url, timeout=15)
+            r.raise_for_status()
+            art = r.content
+            mime = r.headers.get("Content-Type", mime).split(";")[0]
+        except Exception as e:
+            print(f"Could not download cover for '{title}': {e}")
+
+    try:
+        tags = ID3(path)
+    except ID3NoHeaderError:
+        tags = ID3()
+
+    suffix = f" (part {part})" if part > 1 else ""
+    tags.setall("TIT2", [TIT2(encoding=3, text=f"{title} - {start:%d %b %Y}{suffix}")])
+    tags.setall("TALB", [TALB(encoding=3, text=title)])
+    tags.setall("TPE1", [TPE1(encoding=3, text="Aberdeen Student Radio")])
+    tags.setall("TDRC", [TDRC(encoding=3, text=start.strftime("%Y-%m-%dT%H:%M"))])
+    tags.setall("TCON", [TCON(encoding=3, text="Radio")])
+    if art:
+        tags.setall("APIC", [APIC(encoding=3, mime=mime, type=3, desc="Cover", data=art)])
+    tags.save(path, v2_version=3)  # v2.3 is the most widely supported
+
+
 def get_next_shows(url: str,  tz: ZoneInfo):
 
     current_shows = scrape_slides(url)
@@ -123,7 +157,8 @@ async def _sleep_until(when: datetime.datetime, tz: ZoneInfo):
 async def create_record_show_continuous_task(title: str, start: datetime.datetime, end: datetime.datetime, stream_url: str, out_dir: str,
                       start_padding: datetime.timedelta,
                       end_padding: datetime.timedelta,
-                      tz: ZoneInfo, retry_delay: datetime.timedelta):
+                      tz: ZoneInfo, retry_delay: datetime.timedelta,
+                      img: str | None = None):
 
     await _sleep_until(start - start_padding, tz)
  
@@ -136,7 +171,11 @@ async def create_record_show_continuous_task(title: str, start: datetime.datetim
             break
  
         attempt += 1
-        file_name = f"{title}.mp3" if attempt == 1 else f"{title}_part{attempt}.mp3"
+        # Start time keeps same-titled shows apart (e.g. two "After hours" slots a day);
+        # sanitising avoids characters that are invalid in file names.
+        safe_title = re.sub(r'[\\/:*?"<>|]+', "-", title).strip() or "show"
+        base = f"{start:%H%M} {safe_title}"
+        file_name = f"{base}.mp3" if attempt == 1 else f"{base}_part{attempt}.mp3"
 
         print(f"Recording {title} -> {out_dir} ({remaining.total_seconds():.0f} s)")
         try:
@@ -144,12 +183,17 @@ async def create_record_show_continuous_task(title: str, start: datetime.datetim
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            print("ffmpeg failed for '%s': %s", title, e)
+            print(f"ffmpeg failed for '{title}': {e}")
 
         path = Path(f'{out_dir}/{file_name}')
  
         if path.exists() and path.stat().st_size == 0:
             path.unlink()  # don't leave empty files from failed attempts
+        elif path.exists():
+            try:
+                await asyncio.to_thread(tag_recording, path, title, start, img, attempt)
+            except Exception as e:  # tagging must never break the retry loop
+                print(f"Tagging failed for '{title}': {e}")
 
         now = datetime.datetime.now(tz)
  
@@ -175,7 +219,7 @@ async def record_continuous(url: str,
     try:
         while True:
             try:
-                shows = get_next_shows(url, tz)
+                shows = await asyncio.to_thread(get_next_shows, url, tz)
                 now = datetime.datetime.now(tz)
  
                 for show in shows:
@@ -195,7 +239,7 @@ async def record_continuous(url: str,
 
                     
                     task = asyncio.create_task(
-                        create_record_show_continuous_task(show['title'], show['start'], show['end'], stream_url, out_folder, start_padding, end_padding, tz, retry_delay),
+                        create_record_show_continuous_task(show['title'], show['start'], show['end'], stream_url, out_folder, start_padding, end_padding, tz, retry_delay, show['img']),
                         name=f'record:{show["title"]}',
                     )
                     tasks[key] = (task, show)
@@ -227,4 +271,3 @@ async def record_continuous(url: str,
         for task, _ in tasks.values():
             task.cancel()
         await asyncio.gather(*(t for t, _ in tasks.values()), return_exceptions=True)
- 
