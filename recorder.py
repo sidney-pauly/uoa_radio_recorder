@@ -158,7 +158,8 @@ async def create_record_show_continuous_task(title: str, start: datetime.datetim
                       start_padding: datetime.timedelta,
                       end_padding: datetime.timedelta,
                       tz: ZoneInfo, retry_delay: datetime.timedelta,
-                      img: str | None = None):
+                      img: str | None = None,
+                      min_play_time: datetime.timedelta = datetime.timedelta(seconds=120)):
 
     await _sleep_until(start - start_padding, tz)
  
@@ -167,7 +168,7 @@ async def create_record_show_continuous_task(title: str, start: datetime.datetim
 
     while True:
         remaining = ((end + end_padding) - now)
-        if remaining < datetime.timedelta(seconds=5):
+        if remaining < min_play_time:
             break
  
         attempt += 1
@@ -210,9 +211,12 @@ async def record_continuous(url: str,
                             out: str,
                             start_padding: datetime.timedelta,
                             end_padding: datetime.timedelta,
+                            blacklist: list[str],
+                            re_blacklist: list[str],
                             tz: ZoneInfo = LONDON,
                             retry_delay: datetime.timedelta = datetime.timedelta(seconds=60),
-                            poll_interval: datetime.timedelta = datetime.timedelta(minutes=5)):
+                            poll_interval: datetime.timedelta = datetime.timedelta(minutes=5),
+                            min_play_time: datetime.timedelta = datetime.timedelta(seconds=120)):
 
     tasks: dict[tuple, tuple[asyncio.Task, dict]] = {}
  
@@ -221,15 +225,29 @@ async def record_continuous(url: str,
             try:
                 shows = await asyncio.to_thread(get_next_shows, url, tz)
                 now = datetime.datetime.now(tz)
+                scheduled_count = 0
  
                 for show in shows:
                     key = (show["title"], show["start"])
+
+                    if show['title'] in blacklist:
+                        continue
+
+                    re_match = False
+                    for r in re_blacklist:
+                        if re.match(r, show["title"]) is not None:
+                            re_match = True
+                    
+                    if re_match:
+                        continue
  
                     if key in tasks:
                         continue
 
                     if show["end"] + end_padding <= now:
                         continue  # already over
+
+                    scheduled_count += 1
  
                     print(f'Scheduling {show["title"]} {show["start"]:%H:%M}-{show["end"]:%H:%M}')
 
@@ -239,7 +257,7 @@ async def record_continuous(url: str,
 
                     
                     task = asyncio.create_task(
-                        create_record_show_continuous_task(show['title'], show['start'], show['end'], stream_url, out_folder, start_padding, end_padding, tz, retry_delay, show['img']),
+                        create_record_show_continuous_task(show['title'], show['start'], show['end'], stream_url, out_folder, start_padding, end_padding, tz, retry_delay, show['img'], min_play_time),
                         name=f'record:{show["title"]}',
                     )
                     tasks[key] = (task, show)
@@ -262,11 +280,16 @@ async def record_continuous(url: str,
             # to catch the next schedule when the last known show is about to end.
             now = datetime.datetime.now(tz)
             wake = now + poll_interval
-            upcoming = [s["end"] - start_padding for _, s in tasks.values()
-                        if s["end"] - start_padding > now]
+            # Using s["end"] here as we are interested in the end of the current show
+            upcoming = [s["end"] - start_padding for _, s in tasks.values() if s["end"] - start_padding > now] 
             if upcoming:
                 wake = min(wake, max(upcoming))
-            await asyncio.sleep(max(5, (wake - now).total_seconds()))
+
+            wait_seconds = (wake - now).total_seconds()
+
+            print(f'Nothing to schedule waiting for {int(wait_seconds)}s to re check')
+            
+            await asyncio.sleep(max(5, wait_seconds))
     finally:
         for task, _ in tasks.values():
             task.cancel()

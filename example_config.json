@@ -1,0 +1,12 @@
+{
+  "url": "https://aberdeenstudentradio.com/",
+  "streamUrl": "https://streaming.broadcast.radio/aberdeenstudentradio",
+  "out": "./out",
+  "padding": 10,
+  "paddingEnd": 10,
+  "blacklist": ["After hours with Aberdeen Student Radio"],
+  "reBlacklist": [],
+  "pollInterval": 5,
+  "retryDelay": 120,
+  "minPlayTime": 180
+}
